@@ -1,9 +1,7 @@
-// In file: MainActivity.kt
 package co.uk.doverguitarteacher.wheresmycar
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Bundle
@@ -14,11 +12,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.ViewInAr
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +28,9 @@ import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.launch
+
+// Defines the screens we can navigate between
+enum class Screen { MAP, AR }
 
 class MainActivity : ComponentActivity() {
 
@@ -51,19 +51,14 @@ class MainActivity : ComponentActivity() {
 fun ParkMyCarScreen(dao: ParkedLocationDao) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    var currentScreen by remember { mutableStateOf(Screen.MAP) }
 
     val savedLocationState by dao.getParkedLocation().collectAsState(initial = null)
+    val currentUserLocation by rememberUpdatedLocationState()
 
     var hasLocationPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        )
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
     }
-
-    // --- NEW: Get sensor and live location data FROM THE HELPER FUNCTIONS ---
-    val sensorHelper = rememberSensorManagerHelper()
-    val currentUserLocation by rememberUpdatedLocationState()
-    // ----------------------------------------------------------------------
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -93,59 +88,74 @@ fun ParkMyCarScreen(dao: ParkedLocationDao) {
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         if (hasLocationPermission) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                GoogleMap(
-                    modifier = Modifier.fillMaxSize(),
-                    cameraPositionState = cameraPositionState,
-                    uiSettings = MapUiSettings(zoomControlsEnabled = false)
-                ) {
-                    savedLocationState?.let { location ->
-                        Marker(
-                            state = MarkerState(position = LatLng(location.latitude, location.longitude)),
-                            title = "My Car",
-                            snippet = "Lat: ${location.latitude}, Lng: ${location.longitude}"
+            Scaffold(
+                bottomBar = {
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.MAP,
+                            onClick = { currentScreen = Screen.MAP },
+                            label = { Text("Map") },
+                            icon = { Icon(Icons.Filled.LocationOn, "Map") }
+                        )
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.AR,
+                            onClick = { currentScreen = Screen.AR },
+                            label = { Text("AR") },
+                            icon = { Icon(Icons.Filled.ViewInAr, "AR View") }
                         )
                     }
                 }
+            ) { paddingValues ->
+                Box(modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)) {
 
-                // --- NEW: Add the CompassView to the UI ---
-                // We only show the compass if a car has been parked.
-                if (savedLocationState != null) {
-                    CompassView(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 32.dp),
-                        phoneAzimuth = sensorHelper.azimuth,
-                        userLocation = currentUserLocation,
-                        carLocation = savedLocationState
-                    )
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.Bottom,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    if (isFindingLocation) {
-                        CircularProgressIndicator()
-                    } else {
-                        Button(onClick = {
-                            isFindingLocation = true
-                            getCurrentLocation(context) { location ->
-                                isFindingLocation = false
-                                val parkedLocation = ParkedLocation(
-                                    latitude = location.latitude,
-                                    longitude = location.longitude
-                                )
-                                coroutineScope.launch {
-                                    dao.upsertParkedLocation(parkedLocation)
+                    when (currentScreen) {
+                        Screen.MAP -> {
+                            GoogleMap(
+                                modifier = Modifier.fillMaxSize(),
+                                properties = MapProperties(isMyLocationEnabled = true),
+                                cameraPositionState = cameraPositionState,
+                                uiSettings = MapUiSettings(zoomControlsEnabled = false)
+                            ) {
+                                savedLocationState?.let { location ->
+                                    Marker(
+                                        state = MarkerState(position = LatLng(location.latitude, location.longitude)),
+                                        title = "My Car",
+                                    )
                                 }
-                                Toast.makeText(context, "Location Saved!", Toast.LENGTH_SHORT).show()
                             }
-                        }) {
-                            Text("Park My Car!")
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.Bottom,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                if (isFindingLocation) {
+                                    CircularProgressIndicator()
+                                } else {
+                                    Button(onClick = {
+                                        isFindingLocation = true
+                                        currentUserLocation?.let { location ->
+                                            val parkedLocation = ParkedLocation(latitude = location.latitude, longitude = location.longitude)
+                                            coroutineScope.launch { dao.upsertParkedLocation(parkedLocation) }
+                                            Toast.makeText(context, "Location Saved!", Toast.LENGTH_SHORT).show()
+                                            isFindingLocation = false
+                                        } ?: run {
+                                            Toast.makeText(context, "Could not get location. Move to a clearer area.", Toast.LENGTH_SHORT).show()
+                                            isFindingLocation = false
+                                        }
+                                    }) {
+                                        Text("Park My Car!")
+                                    }
+                                }
+                            }
+                        }
+                        Screen.AR -> {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("AR View Coming Soon...")
+                            }
                         }
                     }
                 }
@@ -157,10 +167,8 @@ fun ParkMyCarScreen(dao: ParkedLocationDao) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text("We need location permission to find your car.")
-                Button(
-                    onClick = { permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
-                    modifier = Modifier.padding(top = 20.dp)
-                ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }) {
                     Text("Grant Permission")
                 }
             }
@@ -168,21 +176,7 @@ fun ParkMyCarScreen(dao: ParkedLocationDao) {
     }
 }
 
-@SuppressLint("MissingPermission")
-fun getCurrentLocation(context: Context, onLocationFetched: (Location) -> Unit) {
-    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
-    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-        .addOnSuccessListener { location: Location? ->
-            location?.let {
-                onLocationFetched(it)
-            } ?: Toast.makeText(context, "Could not get location. Try again.", Toast.LENGTH_SHORT).show()
-        }
-        .addOnFailureListener { e ->
-            Toast.makeText(context, "Failed to get location: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-}
 
-// Helper Composable for getting LIVE location updates
 @SuppressLint("MissingPermission")
 @Composable
 fun rememberUpdatedLocationState(): State<Location?> {
@@ -193,17 +187,15 @@ fun rememberUpdatedLocationState(): State<Location?> {
     DisposableEffect(key1 = fusedLocationClient) {
         val locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                locationState.value = result.lastLocation
+                result.lastLocation?.let { location ->
+                    if (location.accuracy < 30.0f) {
+                        locationState.value = location
+                    }
+                }
             }
         }
-
-        val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            1000 // Update every 1 second
-        ).build()
-
+        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000).build()
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
-
         onDispose {
             fusedLocationClient.removeLocationUpdates(locationCallback)
         }
